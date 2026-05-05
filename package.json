@@ -1,0 +1,57 @@
+{
+  "name": "liteai-ts",
+  "version": "0.6.0",
+  "description": "Lightweight AI client for OpenAI-compatible APIs (TypeScript)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],       
+  "license": "MIT",
+  "author": "sarensaren",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cat-more/liteai-ts.git"
+  },  
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "example": "ts-node examples/basic.ts",
+    "vision": "ts-node examples/vision.ts",
+    "image-gen": "ts-node examples/image-gen.ts",
+    "embeddings": "ts-node examples/embeddings.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:client": "jest __tests__/client.test.ts",
+    "test:modules": "jest __tests__/modules.test.ts",
+    "test:models": "jest __tests__/modules-models.test.ts",
+    "test:retry": "jest __tests__/client.retry.test.ts",
+    "test:transcriptio": "jest __tests__/transcription.test.ts",
+    "test:files": "jest __tests__/files.test.ts",
+    "test:batches": "jest __tests__/batches.test.ts",
+    "tts": "ts-node examples/tts.ts",
+    "transcribe": "ts-node examples/transcription.ts",
+    "files": "ts-node examples/files.ts",
+    "upload-oss": "ts-node examples/upload-oss.ts",
+    "batches": "ts-node examples/batches.ts"
+  },
+  "keywords": [
+    "openai",
+    "llm",
+    "client",
+    "typescript"
+  ],
+
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/nock": "^10.0.3",
+    "@types/node": "^20.0.0",
+    "jest": "^30.3.0",
+    "nock": "^14.0.13",
+    "ts-jest": "^29.4.9",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "optionalDependencies": {
+    "http-proxy-agent": "^7.0.0",
+    "https-proxy-agent": "^7.0.0"
+  }
+}

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+logs/
+md/
+myaudio/
+myimages/
+*.log
+.env
+.DS_Store
+coverage/
+models.json
