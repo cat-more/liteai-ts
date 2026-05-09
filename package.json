@@ -31,7 +31,8 @@
     "transcribe": "ts-node examples/transcription.ts",
     "files": "ts-node examples/files.ts",
     "upload-oss": "ts-node examples/upload-oss.ts",
-    "batches": "ts-node examples/batches.ts"
+    "batches": "ts-node examples/batches.ts",
+    "models": "ts-node examples/models.ts"
   },
   "keywords": [
     "openai",

@@ -22,8 +22,8 @@ import { createLogger, createNullLogger } from './log';
 // import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse } from './types';
 // import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams } from './types';
 // import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams,BatchCreateParams,BatchListResponse,Batch } from './types';
-import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams,BatchCreateParams,BatchListResponse,Batch } from './types';
-
+// import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams,BatchCreateParams,BatchListResponse,Batch } from './types';
+import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams, BatchCreateParams, BatchListResponse, Batch, ModelListResponse } from './types';
 
 
 export interface LiteAIConfig {
@@ -348,63 +348,67 @@ export class LiteAI {
 
     try {
       for await (const chunk of response) {
-        const text = chunk.toString('utf-8');
-        const lines = text.split('\n');
-        for (let line of lines) {
-          line = line.trim();
-          if (!line) continue;
-          collectedLines.push(line);
-          let dataStr: string | null = null;
-          for (const prefix of dataPrefixes) {
-            if (line.startsWith(prefix)) {
-              dataStr = line.slice(prefix.length).trimStart();
-              break;
-            }
-          }
-          if (dataStr === null) continue;
-          if (dataStr === '[DONE]') {
+      const text = chunk.toString('utf-8');
+      const lines = text.split('\n');
+      for (let line of lines) {
+        line = line.trim();
+        if (!line) continue;
+        collectedLines.push(line);
+        let dataStr: string | null = null;
+        for (const prefix of dataPrefixes) {
+          if (line.startsWith(prefix)) {
+            dataStr = line.slice(prefix.length).trimStart();
             break;
           }
-          const testStr = buffer + dataStr;
-          try {
-            const parsed = JSON.parse(testStr);
-            buffer = '';
-            if (firstChunkTime === null && parsed.choices?.[0]?.delta?.content) {
-              firstChunkTime = Date.now() - startTime;
-            }
-            yield parsed as ChatCompletionChunk;
-          } catch (e: any) {
-            // 增强缓存：如果解析失败但可能是跨行，继续缓存
-            if (e.message.includes('Unterminated string') || e.message.includes('Expecting value')) {
-              buffer = testStr;
-              this.log.debug(`不完整的 JSON 片段，已缓存 (当前长度 ${buffer.length})`);
-            } else {
-              // 对于其他错误（如逗号缺失），仍然缓存尝试合并（智谱有时会拆分字段）
-              buffer = testStr;
-              this.log.debug(`JSON 解析临时失败，继续缓存 (长度 ${buffer.length})`);
-            }
+        }
+        if (dataStr === null) continue;
+        if (dataStr === '[DONE]') {
+          break;
+        }
+        const testStr = buffer + dataStr;
+        try {
+          const parsed = JSON.parse(testStr);
+          buffer = '';
+          if (firstChunkTime === null && parsed.choices?.[0]?.delta?.content) {
+            firstChunkTime = Date.now() - startTime;
           }
+          yield parsed;
+        } catch (e: any) {
+          // 解析失败，缓存
+          buffer = testStr;
         }
       }
-    } finally {
-      if (this.logDetail === 1) {
-        this.log.debug(`SSE 总行数: ${collectedLines.length}`);
-      } else if (this.logDetail === 2) {
-        if (collectedLines.length <= 20) {
-          collectedLines.forEach(line => this.log.debug(line));
-        } else {
-          collectedLines.slice(0, 10).forEach(line => this.log.debug(line));
-          this.log.debug(`... 省略 ${collectedLines.length - 20} 行 ...`);
-          collectedLines.slice(-10).forEach(line => this.log.debug(line));
-        }
-      } else {
-        collectedLines.forEach(line => this.log.debug(line));
+    } // for await 结束
+
+    // --- 修复点：处理剩余的 buffer ---
+    if (buffer) {
+      try {
+        const parsed = JSON.parse(buffer);
+        this.log.debug(`流结束，成功解析剩余 buffer，长度 ${buffer.length}`);
+        yield parsed;
+      } catch (e: any) {
+        this.log.warn(`流结束，剩余 buffer 解析失败: ${buffer.slice(0, 200)}`);
       }
-      if (this.rawLogger) {
-        this.rawLogger.debug(`=== RAW SSE STREAM ===\n${collectedLines.join('\n')}`);
-      }
-      this.log.debug('流式响应连接已关闭');
     }
+      } finally {
+          if (this.logDetail === 1) {
+            this.log.debug(`SSE 总行数: ${collectedLines.length}`);
+          } else if (this.logDetail === 2) {
+            if (collectedLines.length <= 20) {
+              collectedLines.forEach(line => this.log.debug(line));
+            } else {
+              collectedLines.slice(0, 10).forEach(line => this.log.debug(line));
+              this.log.debug(`... 省略 ${collectedLines.length - 20} 行 ...`);
+              collectedLines.slice(-10).forEach(line => this.log.debug(line));
+            }
+          } else {
+            collectedLines.forEach(line => this.log.debug(line));
+          }
+          if (this.rawLogger) {
+            this.rawLogger.debug(`=== RAW SSE STREAM ===\n${collectedLines.join('\n')}`);
+          }
+          this.log.debug('流式响应连接已关闭');
+        }
   }
 
   // 图像生成模块（自动适配 OpenAI / 阿里云 DashScope / 智谱等）
@@ -1113,6 +1117,22 @@ export class LiteAI {
     },
   };
 
+public models = {
+  /**
+   * 获取模型列表
+   * @returns Promise<ModelListResponse> 模型列表
+   */
+  list: async (): Promise<ModelListResponse> => {
+    const requestId = randomUUID();
+    const result = await this.request('GET', '/models', requestId, undefined, {
+      stream: false,
+      responseType: 'json',
+      requestType: 'json',
+    });
+    const { data } = result as { data: ModelListResponse; retryCount: number };
+    return data;
+  },
+};
 
   public chat = {
     completions: {
@@ -1327,59 +1347,60 @@ export class LiteAI {
   };
 
 
-public batches = {
-  // 创建批处理任务
-  create: async (params: BatchCreateParams): Promise<Batch> => {
-    const requestId = randomUUID();
-    const result = await this.request('POST', '/batches', requestId, params, {
-      stream: false,
-      responseType: 'json',
-      requestType: 'json',
-    });
-    const { data } = result as { data: Batch; retryCount: number };
-    return data;
-  },
+  public batches = {
+    // 创建批处理任务
+    create: async (params: BatchCreateParams): Promise<Batch> => {
+      const requestId = randomUUID();
+      const result = await this.request('POST', '/batches', requestId, params, {
+        stream: false,
+        responseType: 'json',
+        requestType: 'json',
+      });
+      const { data } = result as { data: Batch; retryCount: number };
+      return data;
+    },
 
-  // 获取批处理任务详情
-  retrieve: async (batchId: string): Promise<Batch> => {
-    const requestId = randomUUID();
-    const result = await this.request('GET', `/batches/${batchId}`, requestId, undefined, {
-      stream: false,
-      responseType: 'json',
-      requestType: 'json',
-    });
-    const { data } = result as { data: Batch; retryCount: number };
-    return data;
-  },
+    // 获取批处理任务详情
+    retrieve: async (batchId: string): Promise<Batch> => {
+      const requestId = randomUUID();
+      const result = await this.request('GET', `/batches/${batchId}`, requestId, undefined, {
+        stream: false,
+        responseType: 'json',
+        requestType: 'json',
+      });
+      const { data } = result as { data: Batch; retryCount: number };
+      return data;
+    },
 
-  // 列出批处理任务
-  list: async (limit?: number, after?: string): Promise<BatchListResponse> => {
-    const requestId = randomUUID();
-    let path = '/batches';
-    const params = new URLSearchParams();
-    if (limit !== undefined) params.append('limit', limit.toString());
-    if (after) params.append('after', after);
-    if (params.toString()) path += `?${params.toString()}`;
-    const result = await this.request('GET', path, requestId, undefined, {
-      stream: false,
-      responseType: 'json',
-      requestType: 'json',
-    });
-    const { data } = result as { data: BatchListResponse; retryCount: number };
-    return data;
-  },
+    // 列出批处理任务
+    list: async (limit?: number, after?: string): Promise<BatchListResponse> => {
+      const requestId = randomUUID();
+      let path = '/batches';
+      const params = new URLSearchParams();
+      if (limit !== undefined) params.append('limit', limit.toString());
+      if (after) params.append('after', after);
+      if (params.toString()) path += `?${params.toString()}`;
+      const result = await this.request('GET', path, requestId, undefined, {
+        stream: false,
+        responseType: 'json',
+        requestType: 'json',
+      });
+      const { data } = result as { data: BatchListResponse; retryCount: number };
+      return data;
+    },
 
-  // 取消批处理任务
-  cancel: async (batchId: string): Promise<Batch> => {
-    const requestId = randomUUID();
-    const result = await this.request('POST', `/batches/${batchId}/cancel`, requestId, undefined, {
-      stream: false,
-      responseType: 'json',
-      requestType: 'json',
-    });
-    const { data } = result as { data: Batch; retryCount: number };
-    return data;
-  },
-};
+    // 取消批处理任务
+    cancel: async (batchId: string): Promise<Batch> => {
+      const requestId = randomUUID();
+      const result = await this.request('POST', `/batches/${batchId}/cancel`, requestId, undefined, {
+        stream: false,
+        responseType: 'json',
+        requestType: 'json',
+      });
+      const { data } = result as { data: Batch; retryCount: number };
+      return data;
+    },
+  };
+  
   
 }

@@ -435,3 +435,51 @@ export interface BatchListResponse {
   has_more: boolean;
 }
 
+
+// ========== 模型列表 ==========
+/**
+ * 定价信息
+ */
+export interface ModelPricing {
+  prompt: string;          // 输入价格（通常为每千token）
+  completion: string;      // 输出价格
+  image?: string;          // 图片计费（可选）
+  request?: string;        // 按次计费
+  input_cache_read?: string; // 缓存读取价格
+}
+
+/**
+ * 数据中心信息
+ */
+export interface ModelDatacenter {
+  country_code: string;
+}
+
+/**
+ * 模型详细信息
+ */
+export interface ModelInfo {
+  id: string;                     // 模型标识符
+  name?: string;                  // 模型名称
+  created: number;                // Unix 时间戳（秒）
+  description?: string;           // 功能描述
+  input_modalities: string[];     // 支持的输入模态，如 ["text", "image"]
+  output_modalities: string[];    // 支持的输出模态，如 ["text"]
+  context_length: number;         // 最大上下文长度（token）
+  max_output_length: number;      // 单次请求最大输出长度（token）
+  quantization?: string;          // 量化精度，如 "fp8"
+  pricing?: ModelPricing;         // 定价信息
+  supported_sampling_parameters?: string[]; // 支持的采样参数列表
+  supported_features?: string[];  // 支持的功能，如 ["tools", "json_mode", "reasoning"]
+  openrouter?: { slug: string };
+  datacenters?: ModelDatacenter[];
+  [key: string]: any;             // 允许扩展字段
+}
+
+/**
+ * 模型列表响应
+ */
+export interface ModelListResponse {
+  object: 'list';
+  data: ModelInfo[];
+}
