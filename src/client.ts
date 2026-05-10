@@ -67,11 +67,11 @@ export class LiteAI {
     if (Array.isArray(config.timeout)) {
       this.timeout = config.timeout[1];
     } else {
-      this.timeout = config.timeout || 60;
+      this.timeout = config.timeout || 300;
     }
     this.maxRetries = config.maxRetries ?? 3;
     this.backoffFactor = config.backoffFactor ?? 1.0;
-    this.maxWait = config.maxWait ?? 60;
+    this.maxWait = config.maxWait ?? 120;
     this.verifySsl = config.verifySsl ?? true;
     this.proxy = config.proxy;
     this.logDetail = config.logDetail ?? 2;
@@ -340,90 +340,114 @@ export class LiteAI {
 
 
   private async *streamResponse(response: http.IncomingMessage): AsyncIterable<ChatCompletionChunk> {
-  let buffer = '';
-  const dataPrefixes = ['data: ', 'data:'];
-  const collectedLines: string[] = [];
-  let firstChunkTime: number | null = null;
-  const startTime = Date.now();
+    let buffer = '';                // 用于拼接不完整的 JSON（跨行累积）
+    let pendingLine = '';          // 用于存储被 TCP 拆包截断的不完整行（不含换行符）
+    const dataPrefixes = ['data: ', 'data:'];
+    const collectedLines: string[] = [];
+    let firstChunkTime: number | null = null;
+    const startTime = Date.now();
 
-  try {
-    for await (const chunk of response) {
-      const text = chunk.toString('utf-8');
-      const lines = text.split('\n');
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        collectedLines.push(trimmed);
+    try {
+      for await (const chunk of response) {
+        const text = pendingLine + chunk.toString('utf-8');
+        pendingLine = ''; // 重置，因为已经拼接
+        const lines = text.split('\n');
+        // 最后一行可能不完整，暂存到 pendingLine 等待下一个 chunk
+        // 但需要确保最后一行不是空字符串（避免无限拼接）
+        const lastLine = lines.pop();
+        if (lastLine !== undefined) {
+          pendingLine = lastLine;
+        }
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          collectedLines.push(trimmed);
+          let dataStr: string | null = null;
+          for (const prefix of dataPrefixes) {
+            if (trimmed.startsWith(prefix)) {
+              dataStr = trimmed.slice(prefix.length).trimStart();
+              break;
+            }
+          }
+          if (dataStr === null) continue;
+          if (dataStr === '[DONE]') break;
 
-        let dataStr: string | null = null;
-        for (const prefix of dataPrefixes) {
-          if (trimmed.startsWith(prefix)) {
-            dataStr = trimmed.slice(prefix.length).trimStart();
-            break;
+          const testStr = buffer + dataStr;
+          try {
+            const parsed = JSON.parse(testStr);
+            buffer = '';   // 成功解析，清空缓冲区
+            if (firstChunkTime === null && parsed.choices?.[0]?.delta?.content) {
+              firstChunkTime = Date.now() - startTime;
+            }
+            yield parsed;
+          } catch (e: any) {
+            // 解析失败：暂存整个 testStr，等待更多数据
+            buffer = testStr;
+            // 可选日志
+            if (this.logDetail >= 3 && buffer.length < 2000) {
+              this.log.debug(`不完整 JSON 片段，继续累积 (当前长度 ${buffer.length})`);
+            }
           }
         }
-        if (dataStr === null) continue;
-        if (dataStr === '[DONE]') {
-          break;
-        }
+      }
 
-        // 将当前数据块与缓冲区拼接
-        const testStr = buffer + dataStr;
+      // 循环结束后，处理 pendingLine 中残留的不完整行（可能包含 'data: ...'）
+      if (pendingLine) {
+        const trimmed = pendingLine.trim();
+        if (trimmed) {
+          let dataStr: string | null = null;
+          for (const prefix of dataPrefixes) {
+            if (trimmed.startsWith(prefix)) {
+              dataStr = trimmed.slice(prefix.length).trimStart();
+              break;
+            }
+          }
+          if (dataStr && dataStr !== '[DONE]') {
+            const testStr = buffer + dataStr;
+            try {
+              const parsed = JSON.parse(testStr);
+              buffer = '';
+              this.log.debug(`流结束，成功解析 pendingLine 中的数据 (长度 ${testStr.length})`);
+              yield parsed;
+            } catch (e) {
+              this.log.warn(`流结束，pendingLine 数据解析失败: ${testStr.slice(0, 200)}`);
+            }
+          }
+        }
+      }
+
+      // 最后，处理 buffer 中可能残留的完整 JSON（例如没有换行符结尾）
+      if (buffer) {
         try {
-          const parsed = JSON.parse(testStr);
-          // 解析成功，清空缓冲区并输出
-          buffer = '';
-          if (firstChunkTime === null && parsed.choices?.[0]?.delta?.content) {
-            firstChunkTime = Date.now() - startTime;
-          }
+          const parsed = JSON.parse(buffer);
+          this.log.debug(`流结束，成功解析剩余 buffer (长度 ${buffer.length})`);
           yield parsed;
         } catch (e: any) {
-          // 解析失败：保留整个 testStr 作为新的缓冲区（累积）
-          // 注意：testStr 已经包含之前 buffer 的内容，所以直接赋值即可
-          buffer = testStr;
-          // 可选：记录调试信息，避免过长日志
-          if (this.logDetail >= 3 && buffer.length < 2000) {
-            this.log.debug(`不完整 JSON 片段，继续累积 (当前长度 ${buffer.length})`);
-          }
+          const preview = buffer.length > 200 ? buffer.slice(0, 200) + '...' : buffer;
+          this.log.warn(`流结束，剩余 buffer 解析失败: ${preview}`);
         }
       }
-    }
-
-    // ========== 修复点：流结束后，尝试解析缓冲区中剩余的内容 ==========
-    if (buffer) {
-      try {
-        const parsed = JSON.parse(buffer);
-        this.log.debug(`流结束，成功解析剩余 buffer (长度 ${buffer.length})，产出最后数据块`);
-        yield parsed;
-      } catch (e: any) {
-        // 无法解析，记录警告（不抛出错误，避免中断程序）
-        const preview = buffer.length > 200 ? buffer.slice(0, 200) + '...' : buffer;
-        this.log.warn(`流结束，剩余 buffer 解析失败: ${preview}`);
-        // 如果需要，可以在这里抛出一个自定义错误，让上层感知
-        // throw new SSEParseError(`Incomplete JSON at stream end: ${preview}`);
-      }
-    }
-  } finally {
-    // 原有的日志记录逻辑（保持不变）
-    if (this.logDetail === 1) {
-      this.log.debug(`SSE 总行数: ${collectedLines.length}`);
-    } else if (this.logDetail === 2) {
-      if (collectedLines.length <= 20) {
-        collectedLines.forEach(line => this.log.debug(line));
+    } finally {
+      // 原有的日志记录逻辑（保持不变）
+      if (this.logDetail === 1) {
+        this.log.debug(`SSE 总行数: ${collectedLines.length}`);
+      } else if (this.logDetail === 2) {
+        if (collectedLines.length <= 20) {
+          collectedLines.forEach(line => this.log.debug(line));
+        } else {
+          collectedLines.slice(0, 10).forEach(line => this.log.debug(line));
+          this.log.debug(`... 省略 ${collectedLines.length - 20} 行 ...`);
+          collectedLines.slice(-10).forEach(line => this.log.debug(line));
+        }
       } else {
-        collectedLines.slice(0, 10).forEach(line => this.log.debug(line));
-        this.log.debug(`... 省略 ${collectedLines.length - 20} 行 ...`);
-        collectedLines.slice(-10).forEach(line => this.log.debug(line));
+        collectedLines.forEach(line => this.log.debug(line));
       }
-    } else {
-      collectedLines.forEach(line => this.log.debug(line));
+      if (this.rawLogger) {
+        this.rawLogger.debug(`=== RAW SSE STREAM ===\n${collectedLines.join('\n')}`);
+      }
+      this.log.debug('流式响应连接已关闭');
     }
-    if (this.rawLogger) {
-      this.rawLogger.debug(`=== RAW SSE STREAM ===\n${collectedLines.join('\n')}`);
-    }
-    this.log.debug('流式响应连接已关闭');
-  }
-}
+  } 
 
 
   // 图像生成模块（自动适配 OpenAI / 阿里云 DashScope / 智谱等）
