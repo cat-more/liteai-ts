@@ -340,24 +340,25 @@ export class LiteAI {
 
 
   private async *streamResponse(response: http.IncomingMessage): AsyncIterable<ChatCompletionChunk> {
-    let buffer = '';
-    const dataPrefixes = ['data: ', 'data:'];
-    const collectedLines: string[] = [];
-    let firstChunkTime: number | null = null;
-    const startTime = Date.now();
+  let buffer = '';
+  const dataPrefixes = ['data: ', 'data:'];
+  const collectedLines: string[] = [];
+  let firstChunkTime: number | null = null;
+  const startTime = Date.now();
 
-    try {
-      for await (const chunk of response) {
+  try {
+    for await (const chunk of response) {
       const text = chunk.toString('utf-8');
       const lines = text.split('\n');
-      for (let line of lines) {
-        line = line.trim();
-        if (!line) continue;
-        collectedLines.push(line);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        collectedLines.push(trimmed);
+
         let dataStr: string | null = null;
         for (const prefix of dataPrefixes) {
-          if (line.startsWith(prefix)) {
-            dataStr = line.slice(prefix.length).trimStart();
+          if (trimmed.startsWith(prefix)) {
+            dataStr = trimmed.slice(prefix.length).trimStart();
             break;
           }
         }
@@ -365,51 +366,65 @@ export class LiteAI {
         if (dataStr === '[DONE]') {
           break;
         }
+
+        // 将当前数据块与缓冲区拼接
         const testStr = buffer + dataStr;
         try {
           const parsed = JSON.parse(testStr);
+          // 解析成功，清空缓冲区并输出
           buffer = '';
           if (firstChunkTime === null && parsed.choices?.[0]?.delta?.content) {
             firstChunkTime = Date.now() - startTime;
           }
           yield parsed;
         } catch (e: any) {
-          // 解析失败，缓存
+          // 解析失败：保留整个 testStr 作为新的缓冲区（累积）
+          // 注意：testStr 已经包含之前 buffer 的内容，所以直接赋值即可
           buffer = testStr;
+          // 可选：记录调试信息，避免过长日志
+          if (this.logDetail >= 3 && buffer.length < 2000) {
+            this.log.debug(`不完整 JSON 片段，继续累积 (当前长度 ${buffer.length})`);
+          }
         }
       }
-    } // for await 结束
+    }
 
-    // --- 修复点：处理剩余的 buffer ---
+    // ========== 修复点：流结束后，尝试解析缓冲区中剩余的内容 ==========
     if (buffer) {
       try {
         const parsed = JSON.parse(buffer);
-        this.log.debug(`流结束，成功解析剩余 buffer，长度 ${buffer.length}`);
+        this.log.debug(`流结束，成功解析剩余 buffer (长度 ${buffer.length})，产出最后数据块`);
         yield parsed;
       } catch (e: any) {
-        this.log.warn(`流结束，剩余 buffer 解析失败: ${buffer.slice(0, 200)}`);
+        // 无法解析，记录警告（不抛出错误，避免中断程序）
+        const preview = buffer.length > 200 ? buffer.slice(0, 200) + '...' : buffer;
+        this.log.warn(`流结束，剩余 buffer 解析失败: ${preview}`);
+        // 如果需要，可以在这里抛出一个自定义错误，让上层感知
+        // throw new SSEParseError(`Incomplete JSON at stream end: ${preview}`);
       }
     }
-      } finally {
-          if (this.logDetail === 1) {
-            this.log.debug(`SSE 总行数: ${collectedLines.length}`);
-          } else if (this.logDetail === 2) {
-            if (collectedLines.length <= 20) {
-              collectedLines.forEach(line => this.log.debug(line));
-            } else {
-              collectedLines.slice(0, 10).forEach(line => this.log.debug(line));
-              this.log.debug(`... 省略 ${collectedLines.length - 20} 行 ...`);
-              collectedLines.slice(-10).forEach(line => this.log.debug(line));
-            }
-          } else {
-            collectedLines.forEach(line => this.log.debug(line));
-          }
-          if (this.rawLogger) {
-            this.rawLogger.debug(`=== RAW SSE STREAM ===\n${collectedLines.join('\n')}`);
-          }
-          this.log.debug('流式响应连接已关闭');
-        }
+  } finally {
+    // 原有的日志记录逻辑（保持不变）
+    if (this.logDetail === 1) {
+      this.log.debug(`SSE 总行数: ${collectedLines.length}`);
+    } else if (this.logDetail === 2) {
+      if (collectedLines.length <= 20) {
+        collectedLines.forEach(line => this.log.debug(line));
+      } else {
+        collectedLines.slice(0, 10).forEach(line => this.log.debug(line));
+        this.log.debug(`... 省略 ${collectedLines.length - 20} 行 ...`);
+        collectedLines.slice(-10).forEach(line => this.log.debug(line));
+      }
+    } else {
+      collectedLines.forEach(line => this.log.debug(line));
+    }
+    if (this.rawLogger) {
+      this.rawLogger.debug(`=== RAW SSE STREAM ===\n${collectedLines.join('\n')}`);
+    }
+    this.log.debug('流式响应连接已关闭');
   }
+}
+
 
   // 图像生成模块（自动适配 OpenAI / 阿里云 DashScope / 智谱等）
   public images = {
