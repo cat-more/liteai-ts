@@ -23,7 +23,7 @@ import { createLogger, createNullLogger } from './log';
 // import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams } from './types';
 // import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams,BatchCreateParams,BatchListResponse,Batch } from './types';
 // import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams,BatchCreateParams,BatchListResponse,Batch } from './types';
-import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams, BatchCreateParams, BatchListResponse, Batch, ModelListResponse } from './types';
+import { Logger, StatsCollector, ChatCompletionCreateParams, ChatCompletionResponse, ChatCompletionChunk, LogDetail, LogTruncationConfig, RequestStats, ImageGenerationParams, ImageGenerationResponse, EmbeddingParams, EmbeddingResponse, AudioSpeechParams, AudioTranscriptionParams, AudioTranscriptionResponse, FileListResponse, FileUploadParams, FileObject, FileDeleteResponse, UploadPolicy, UploadToOssParams, BatchCreateParams, BatchListResponse, Batch, ModelListResponse, DEFAULT_LOG_TRUNCATION } from './types';
 
 
 export interface LiteAIConfig {
@@ -38,6 +38,7 @@ export interface LiteAIConfig {
   logMode?: 'single' | 'daily' | 'append';
   consoleLog?: boolean;
   logDetail?: LogDetail;
+  logTruncation?: LogTruncationConfig;
   verifySsl?: boolean;
   proxy?: string;
   rawLogger?: Logger;
@@ -59,6 +60,7 @@ export class LiteAI {
   private rawLogger?: Logger;
   private statsCollector?: StatsCollector;
   private logDetail: LogDetail;
+  private logTruncation: Required<LogTruncationConfig>;
 
   constructor(config: LiteAIConfig) {
     this.apiKey = config.apiKey;
@@ -75,6 +77,14 @@ export class LiteAI {
     this.verifySsl = config.verifySsl ?? true;
     this.proxy = config.proxy;
     this.logDetail = config.logDetail ?? 2;
+    this.logTruncation = {
+      structPrefix: config.logTruncation?.structPrefix ?? DEFAULT_LOG_TRUNCATION.structPrefix,
+      structSuffix: config.logTruncation?.structSuffix ?? DEFAULT_LOG_TRUNCATION.structSuffix,
+      unstructPrefix: config.logTruncation?.unstructPrefix ?? DEFAULT_LOG_TRUNCATION.unstructPrefix,
+      unstructSuffix: config.logTruncation?.unstructSuffix ?? DEFAULT_LOG_TRUNCATION.unstructSuffix,
+      streamPrefix: config.logTruncation?.streamPrefix ?? DEFAULT_LOG_TRUNCATION.streamPrefix,
+      streamSuffix: config.logTruncation?.streamSuffix ?? DEFAULT_LOG_TRUNCATION.streamSuffix,
+    };
     this.rawLogger = config.rawLogger;
     this.statsCollector = config.statsCollector;
 
@@ -101,8 +111,10 @@ export class LiteAI {
     if (this.logDetail >= 3) {
       this.log.debug(`${prefix}: ${bodyStr}`);
     } else if (this.logDetail === 2) {
-      if (bodyStr.length > 1300) {
-        this.log.debug(`${prefix}: ${bodyStr.slice(0, 1000)}...${bodyStr.slice(-300)}`);
+      const { unstructPrefix, unstructSuffix } = this.logTruncation;
+      const total = unstructPrefix + unstructSuffix;
+      if (bodyStr.length > total) {
+        this.log.debug(`${prefix}: ${bodyStr.slice(0, unstructPrefix)}...${bodyStr.slice(-unstructSuffix)}`);
       } else {
         this.log.debug(`${prefix}: ${bodyStr}`);
       }
@@ -432,12 +444,14 @@ export class LiteAI {
       if (this.logDetail === 1) {
         this.log.debug(`SSE 总行数: ${collectedLines.length}`);
       } else if (this.logDetail === 2) {
-        if (collectedLines.length <= 20) {
+        const { streamPrefix, streamSuffix } = this.logTruncation;
+        const total = streamPrefix + streamSuffix;
+        if (collectedLines.length <= total) {
           collectedLines.forEach(line => this.log.debug(line));
         } else {
-          collectedLines.slice(0, 10).forEach(line => this.log.debug(line));
-          this.log.debug(`... 省略 ${collectedLines.length - 20} 行 ...`);
-          collectedLines.slice(-10).forEach(line => this.log.debug(line));
+          collectedLines.slice(0, streamPrefix).forEach(line => this.log.debug(line));
+          this.log.debug(`... 省略 ${collectedLines.length - total} 行 ...`);
+          collectedLines.slice(-streamSuffix).forEach(line => this.log.debug(line));
         }
       } else {
         collectedLines.forEach(line => this.log.debug(line));
@@ -1156,22 +1170,22 @@ export class LiteAI {
     },
   };
 
-public models = {
-  /**
-   * 获取模型列表
-   * @returns Promise<ModelListResponse> 模型列表
-   */
-  list: async (): Promise<ModelListResponse> => {
-    const requestId = randomUUID();
-    const result = await this.request('GET', '/models', requestId, undefined, {
-      stream: false,
-      responseType: 'json',
-      requestType: 'json',
-    });
-    const { data } = result as { data: ModelListResponse; retryCount: number };
-    return data;
-  },
-};
+  public models = {
+    /**
+     * 获取模型列表
+     * @returns Promise<ModelListResponse> 模型列表
+     */
+    list: async (): Promise<ModelListResponse> => {
+      const requestId = randomUUID();
+      const result = await this.request('GET', '/models', requestId, undefined, {
+        stream: false,
+        responseType: 'json',
+        requestType: 'json',
+      });
+      const { data } = result as { data: ModelListResponse; retryCount: number };
+      return data;
+    },
+  };
 
   public chat = {
     completions: {

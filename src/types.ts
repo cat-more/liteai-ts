@@ -191,19 +191,50 @@ export interface ImageGenerationResponse {
 // ========== 文件管理 (可选，用于 Assistants API，暂不实现完整) ==========
 // 可后续扩展，先预留类型
 
+// ========== 文件管理 ==========
 export interface FileObject {
   id: string;
   bytes: number;
   created_at: number;
   filename: string;
   object: 'file';
-  purpose: 'assistants' | 'fine-tune' | 'vision';
+  purpose: 'assistants' | 'fine-tune' | 'vision' | 'batch';
+  deleted?: boolean;
+  url?: string;
 }
-
-// ========== 通用类型 (已有) ==========
 
 export type LogDetail = 1 | 2 | 3;
 export type LogMode = 'single' | 'daily' | 'append';
+
+/**
+ * 日志截断配置（logDetail=2 时生效）
+ * - structured：结构化数据（JSON 等），如请求体、响应体
+ * - unstructured：非结构化数据（纯文本等）
+ * - stream：流式响应（SSE 行）
+ */
+export interface LogTruncationConfig {
+  /** 结构化数据：每项前缀字数，默认 100 */
+  structPrefix?: number;
+  /** 结构化数据：每项后缀字数，默认 50 */
+  structSuffix?: number;
+  /** 非结构化数据：前缀字数，默认 300 */
+  unstructPrefix?: number;
+  /** 非结构化数据：后缀字数，默认 100 */
+  unstructSuffix?: number;
+  /** 流式响应：前缀行数，默认 50 */
+  streamPrefix?: number;
+  /** 流式响应：后缀行数，默认 20 */
+  streamSuffix?: number;
+}
+
+export const DEFAULT_LOG_TRUNCATION: Required<LogTruncationConfig> = {
+  structPrefix: 100,
+  structSuffix: 50,
+  unstructPrefix: 300,
+  unstructSuffix: 100,
+  streamPrefix: 50,
+  streamSuffix: 20,
+};
 
 export interface Logger {
   debug(message: string, ...args: any[]): void;
@@ -346,17 +377,6 @@ export interface AudioTranscriptionResponse {
 
 
 // ========== 文件管理 ==========
-export interface FileObject {
-  id: string;
-  bytes: number;
-  created_at: number;
-  filename: string;
-  object: 'file';
-  purpose: 'assistants' | 'fine-tune' | 'vision';
-  deleted?: boolean;
-  url?: string;
-}
-
 export interface FileListResponse {
   object: 'list';
   data: FileObject[];

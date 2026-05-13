@@ -16,6 +16,7 @@ export {
 
 // 类型定义
 export * from './types';
+export { LogTruncationConfig, DEFAULT_LOG_TRUNCATION } from './types';
 
 
 
