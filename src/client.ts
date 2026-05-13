@@ -107,16 +107,65 @@ export class LiteAI {
     return RETRYABLE_STATUS_CODES.has(statusCode);
   }
 
+  /**
+   * 截断超长字符串：保留前缀 + ... + 后缀
+   */
+  private truncateString(value: string, prefix: number, suffix: number): string {
+    const limit = prefix + suffix;
+    if (value.length <= limit) return value;
+    return value.slice(0, prefix) + '...' + value.slice(-suffix);
+  }
+
+  /**
+   * 递归遍历 JSON 结构，对每个字符串字段应用截断
+   * - 对象：逐字段处理
+   * - 数组：逐元素处理
+   * - 字符串：单独截断
+   * - 其他类型（number/boolean/null）：保持原样
+   */
+  private truncateValue(value: any, prefix: number, suffix: number): any {
+    if (typeof value === 'string') {
+      return this.truncateString(value, prefix, suffix);
+    }
+    if (Array.isArray(value)) {
+      return value.map(item => this.truncateValue(item, prefix, suffix));
+    }
+    if (value !== null && typeof value === 'object') {
+      const result: Record<string, any> = {};
+      for (const [k, v] of Object.entries(value)) {
+        result[k] = this.truncateValue(v, prefix, suffix);
+      }
+      return result;
+    }
+    return value;
+  }
+
   private logBodySummary(bodyStr: string, prefix: string): void {
     if (this.logDetail >= 3) {
       this.log.debug(`${prefix}: ${bodyStr}`);
     } else if (this.logDetail === 2) {
-      const { unstructPrefix, unstructSuffix } = this.logTruncation;
-      const total = unstructPrefix + unstructSuffix;
-      if (bodyStr.length > total) {
-        this.log.debug(`${prefix}: ${bodyStr.slice(0, unstructPrefix)}...${bodyStr.slice(-unstructSuffix)}`);
-      } else {
-        this.log.debug(`${prefix}: ${bodyStr}`);
+      try {
+        const parsed = JSON.parse(bodyStr);
+        const { structPrefix, structSuffix } = this.logTruncation;
+        const truncated = this.truncateValue(parsed, structPrefix, structSuffix);
+        const truncatedStr = JSON.stringify(truncated);
+        // 截断后仍可能超长，再按非结构化数据规则二次截断
+        const { unstructPrefix, unstructSuffix } = this.logTruncation;
+        const total = unstructPrefix + unstructSuffix;
+        if (truncatedStr.length > total) {
+          this.log.debug(`${prefix}: ${truncatedStr.slice(0, unstructPrefix)}...${truncatedStr.slice(-unstructSuffix)}`);
+        } else {
+          this.log.debug(`${prefix}: ${truncatedStr}`);
+        }
+      } catch {
+        // 非 JSON，按纯文本截断
+        const { unstructPrefix, unstructSuffix } = this.logTruncation;
+        const total = unstructPrefix + unstructSuffix;
+        if (bodyStr.length > total) {
+          this.log.debug(`${prefix}: ${bodyStr.slice(0, unstructPrefix)}...${bodyStr.slice(-unstructSuffix)}`);
+        } else {
+          this.log.debug(`${prefix}: ${bodyStr}`);
+        }
       }
     } else {
       this.log.debug(`${prefix}长度: ${bodyStr.length} 字符`);
